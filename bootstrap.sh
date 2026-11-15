@@ -34,6 +34,35 @@ claim_bin() {
   fi
 }
 
+# Vector listens on 127.0.0.1:8091 for POSTs to /impressions. Netdata's
+# Couchbase collector defaults to GET http://127.0.0.1:8091/pools/default/buckets
+# and floods Vector with MethodNotAllowed. Disable it on exchange hosts.
+disable_couchbase_probe() {
+  mkdir -p /etc/netdata/go.d
+  cat > /etc/netdata/go.d/couchbase.conf <<'CONF'
+# Disabled: port 8091 is Vector impressions_in, not Couchbase.
+enabled: no
+CONF
+  # Also disable any stock/enable.conf job if present.
+  if [ -d /etc/netdata/go.d.conf.d ] || [ -f /etc/netdata/go.d.conf ]; then
+    :
+  fi
+  if [ -f /etc/netdata/go.d.conf ]; then
+    # Best-effort: ensure modules.couchbase = no when file is YAML-ish
+    if grep -q 'couchbase:' /etc/netdata/go.d.conf 2>/dev/null; then
+      sed -i 's/^\([[:space:]]*\)couchbase:.*/\1couchbase: no/' /etc/netdata/go.d.conf || true
+    else
+      printf '\nmodules:\n  couchbase: no\n' >> /etc/netdata/go.d.conf || true
+    fi
+  else
+    cat > /etc/netdata/go.d.conf <<'CONF'
+# Managed by netdata-bootstrap (Barestack Deploy)
+modules:
+  couchbase: no
+CONF
+  fi
+}
+
 ensure_claimed() {
   claim="$(claim_bin)" || return 0
   echo "Claiming node to Netdata Cloud..."
@@ -47,7 +76,6 @@ ensure_running() {
     systemctl is-active --quiet netdata.service
     return $?
   fi
-  # Fallback: no unit (should not happen after kickstart on systemd hosts)
   return 1
 }
 
@@ -64,6 +92,9 @@ else
   echo "Netdata already present: $(netdata_bin)"
   ensure_claimed
 fi
+
+disable_couchbase_probe
+echo "Disabled Netdata Couchbase probe on :8091 (reserved for Vector)."
 
 if ! ensure_running; then
   echo "netdata.service failed to become active" >&2
